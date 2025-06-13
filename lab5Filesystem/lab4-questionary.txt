@@ -1,0 +1,118 @@
+=== This template file contains questions you need to answer.
+=== Fill your answers on appropriate blank lines only.
+=== Don't start any line with three equal signs "===".
+=== Don't edit any lines starting from three equal signs.
+=== Use C notation to write numbers: 42 for decimal, 0x2a for hexadecimal.
+=== We may check most of the answers automatically, so "forty two" or
+=== "26+16" won't work for this example. Spaces are mostly ignored, so
+=== "  42  " is OK (without quotes of course). 
+=== When asked to specify address & instruction, do it in the form of
+=== gdb output "ADDRESS: INSTRUCTION", for example "0x7c26:  or  $0x1,%eax"
+=== Don't make lines longer than 80 characters. You don't need to fit your
+=== answer in a single line, you can start a new line at will.
+=== However, when asked to fill "a table" make each table raw a singleline.
+
+=== Q Compare kern/mpentry.S side by side with boot/boot.S. Bearing in
+===   mind that kern/mpentry.S is compiled and linked to run above KERNBASE
+===   just like everything else in the kernel, what is the purpose of macro
+===   MPBOOTPHYS? Why is it necessary in kern/mpentry.S but not in
+===   boot/boot.S? In other words, what could go wrong if it were
+===   omitted in kern/mpentry.S?
+===   (free form)
+The MPBOOTPHYS macro in mpentry.S converts linked virtual addresses
+(above KERNBASE) into the physical addresses where the code actually runs.
+It's necessary because mpentry.S is linked as part of the kernel
+(at high virtual addresses) but  loaded and executed during AP startup before
+paging is enabled, where all memory access must use physical addresses.
+Omitting MPBOOTPHYS causes the AP to jump to or load from the wrong addresses,
+leading to crashes or silent failure.
+In contrast, boot.S (used by the BSP) is linked to run at physical address
+0x7C00, so all addresses used are already correct physical addresses.
+Thus, boot.S doesn't need a macro like MPBOOTPHYS.
+
+=== Q It seems that using the big kernel lock guarantees that only one
+===   CPU can run the kernel code at a time. Why do we still need
+===   separate kernel stacks for each CPU? Describe a scenario in
+===   which using a shared kernel stack will go wrong, even with the
+===   protection of the big kernel lock.
+===   (free form)
+CPUs can receive interrupts or exceptions at any time. If all CPUs shared a
+single kernel stack, an interrupt on one CPU could overwrite the stack data
+of another CPU currently handling a different interrupt, leading to data
+corruption and system instability.
+Scenario: CPU0 is handling a system call and holds the kernel lock. An 
+interrupt arrives at CPU1, which automatically pushes SS, ESP, EFLAGS, CS, and
+EIP into the kernel stack before checking the kernel lock, then it realizing
+that the kernel lock is held, CPU1 waits. However, since both CPUs share the
+same kernel stack, CPU1 pushed data overwrites CPU0 stack data, leading to
+corruption during the execution of the system call.
+
+
+=== Q Whenever the kernel switches from one environment to another, it
+===   must ensure the old environment's registers are saved so they
+===   can be restored properly later. Where does this happen?
+===   (JOS function name)
+trap
+
+=== Q In your implementation of env_run() you should have called
+===   lcr3(). Before and after the call to lcr3(), your code makes
+===   references (at least it should) to the variable e, the argument
+===   to env_run. Upon loading the %cr3 register, the addressing
+===   context used by the MMU is instantly changed. But a virtual
+===   address (namely e) has meaning relative to a given address 
+===   context--the address context specifies the physical address to
+===   which the virtual address maps. Why can the pointer e be
+===   dereferenced both before and after the addressing switch?
+===   (one sentence, free form)
+Because the kernel is mapped identically in all env's page directory, and "e"
+is a virtual address, a pointer to a struct Env, which lives in kernel space.
+
+=== Q In Ex. 9, what happens if the user environment runs out of
+===   space on the exception stack?
+===   (one setence, free form)
+If exception stack overflows happened, then we destroy this environment.
+
+=== Q In dumpfork.c, the first time you call duppage(), the function
+===   allocates a page in one environment (env A) and then maps it in
+===   another (env B). At what address is the page mapped in env A, and
+===   at what address is it mapped in env B?
+===   (ADDR(in env A):ADDR(in env B) (example: 0xAAAAAAAA:0xBBBBBBBB)
+0x00800000:0x00400000
+====================================================================
+=== Q What challenge(s) have you chosen to implement? (specify
+===   challenge numbers separated by spaces, if more than one)
+8
+
+=== Q If the challenge requires changing the kernel source, list the
+===   files which you have changed/added during implementation.
+===   (one file per line, relative to lab directory containing .git/)
+kern/env.h
+kern/sched.c
+kern/env.c
+kern/syscall.c
+
+=== Q Describe you solution.
+===   (free form, up to 500 words, don't need to use all 500!)
+We have added a member to the struct Env env_ipc_sendwait_id, which can tell us
+the enviroment id that the source enviroment wants to communicate with.
+this member is initialized to the same id as the enviroment at inc/env.c : 
+env_alloc().
+ipc_send will work as following:
+1.call sys_ipc_try_send
+  2.1. if the destination env->env_ipc_recving == true, we will continue and at
+       the end of the function we will set the sender env->env_ipc_sendwait_id
+       = env->env_id;
+  2.2. else, we will set the  env->env_ipc_sendwait_id =  to the desired
+       destination enviroment id and return -E_IPC_NOT_RECV.
+3. if returnd -E_IPC_NOT_RECV we call sched_yeild()
+  3.1. sched_yield will check if the env->env_status == runnable(or running if
+       we reach current_env):
+    3.1.1. if env->env_ipc_sendwait_id != env->env_id (this indicates that this
+           enviroment is waiting to send to another enviroment)
+      3.1.1.1. ENVS[env->env_ipc_sendwait_id]->env_ipc_recving == true we will
+               call env_run().
+      3.1.1.2. else, we will contine.
+    3.1.2. else, we can choose this env().
+So, adding this flag will let the ipc_send() wait instead of looping and will
+not consume cpu cycles until the desired destination enviroment want to
+communicate since the sched_yield , as described above, will not choose it.
